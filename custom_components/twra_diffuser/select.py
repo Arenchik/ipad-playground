@@ -2,8 +2,8 @@
 
 A config entity: HomeKit Bridge would turn it into one outlet per option,
 which the Home app scatters as bare tiles, so it stays out of HomeKit
-unless included by hand. The scent modes on the remote cover the same
-ground there.
+unless included by hand. The scent-mode buttons cover the same ground
+there.
 """
 from __future__ import annotations
 

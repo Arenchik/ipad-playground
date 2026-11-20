@@ -59,6 +59,23 @@
         }
       }
     },
+    "button": {
+      "preset_minimum": {
+        "name": "Минимум"
+      },
+      "preset_eco": {
+        "name": "Эко"
+      },
+      "preset_balanced": {
+        "name": "Баланс"
+      },
+      "preset_rich": {
+        "name": "Насыщенно"
+      },
+      "preset_guests": {
+        "name": "Гости на 20 мин"
+      }
+    },
     "humidifier": {
       "intensity": {
         "name": "Интенсивность"
@@ -103,12 +120,6 @@
     },
     "unknown_device": {
       "message": "Это не диффузор TWRA."
-    },
-    "unknown_scent_mode": {
-      "message": "Неизвестный режим аромата: {mode}"
-    },
-    "no_commands": {
-      "message": "У диффузора нет команд пульта, выберите режим аромата."
     },
     "not_found": {
       "message": "Диффузор {address} вне зоны действия Bluetooth-адаптеров и прокси."

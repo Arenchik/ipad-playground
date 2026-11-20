@@ -59,6 +59,23 @@
         }
       }
     },
+    "button": {
+      "preset_minimum": {
+        "name": "Minimum"
+      },
+      "preset_eco": {
+        "name": "Eco"
+      },
+      "preset_balanced": {
+        "name": "Balanced"
+      },
+      "preset_rich": {
+        "name": "Rich"
+      },
+      "preset_guests": {
+        "name": "Guests for 20 min"
+      }
+    },
     "humidifier": {
       "intensity": {
         "name": "Intensity"
@@ -103,12 +120,6 @@
     },
     "unknown_device": {
       "message": "Not a TWRA diffuser."
-    },
-    "unknown_scent_mode": {
-      "message": "Unknown scent mode: {mode}"
-    },
-    "no_commands": {
-      "message": "The diffuser has no remote commands; pick a scent mode instead."
     },
     "not_found": {
       "message": "Diffuser {address} is not in range of any connectable Bluetooth adapter or proxy."

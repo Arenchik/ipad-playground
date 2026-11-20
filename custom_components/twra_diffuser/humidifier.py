@@ -4,7 +4,7 @@ HomeKit has no diffuser service; its humidifier is the closest match (a
 mist icon, an on/off toggle and one percentage slider), and Siri handles
 "set the intensity to 40%". The slider sets the pause between sprays of
 the enabled working modes on a log scale, so low values are fine-grained.
-The named scent modes live on the remote entity.
+The named scent modes are buttons.
 """
 from __future__ import annotations
 

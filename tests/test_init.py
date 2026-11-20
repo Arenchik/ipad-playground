@@ -1,7 +1,7 @@
 """Home Assistant tests: config flow, entities, HomeKit-relevant shape."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,7 +11,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.twra_diffuser.const import CONF_KEEP_CONNECTED, DOMAIN
 from custom_components.twra_diffuser.humidifier import (
@@ -19,13 +20,15 @@ from custom_components.twra_diffuser.humidifier import (
     mode_active_at,
     pause_for_intensity,
 )
-from custom_components.twra_diffuser.remote import preset_labels
 from custom_components.twra_diffuser.twra import WorkingMode
 
 from .conftest import ADDRESS, NAME
 
 DIFFUSER = "humidifier.aroma_diffuser_intensity"
-MODES = "remote.aroma_diffuser"
+BUTTONS = {
+    key: f"button.aroma_diffuser_{key}"
+    for key in ("minimum", "eco", "balanced", "rich", "guests_for_20_min")
+}
 SPRAY = "select.aroma_diffuser_spray_time"
 LAMP = "light.aroma_diffuser_lamp"
 MODE = "switch.aroma_diffuser_mode_1"
@@ -129,7 +132,7 @@ async def test_entities_and_homekit_shape(hass, bluetooth, links, diffuser) -> N
         DIFFUSER,
         LAMP,
         SPRAY,
-        MODES,
+        *BUTTONS.values(),
         MODE,
         "number.aroma_diffuser_mode_1_spray_time",
         "number.aroma_diffuser_mode_1_pause",
@@ -138,7 +141,7 @@ async def test_entities_and_homekit_shape(hass, bluetooth, links, diffuser) -> N
     }
     # HomeKit Bridge only picks up entities without a category.
     exposed = {eid for eid, e in entities.items() if e.entity_category is None}
-    assert exposed == {DIFFUSER, LAMP, MODES}
+    assert exposed == {DIFFUSER, LAMP, *BUTTONS.values()}
     assert all(
         entities[eid].entity_category is EntityCategory.CONFIG for eid in set(entities) - exposed
     )
@@ -276,49 +279,80 @@ async def test_lamp_ignores_amber_set_in_app(hass, bluetooth, links, diffuser) -
     assert diffuser.light == 0
 
 
-async def test_scent_modes(hass, bluetooth, links, diffuser) -> None:
+async def test_old_remote_entity_removed(hass, bluetooth, links, diffuser) -> None:
+    registry = er.async_get(hass)
+    registry.async_get_or_create("remote", DOMAIN, f"{ADDRESS}_scent_modes", suggested_object_id="tv")
     await setup_entry(hass)
-    state = hass.states.get(MODES)
-    assert state.attributes["activity_list"] == [
-        "Faint — 5 s, 15 min pause",
-        "Light — 10 s, 10 min pause",
-        "Standard — 16 s, 8 min pause",
-        "Rich — 20 s, 5 min pause",
-        "Strong — 30 s, 3 min pause",
-        "Intense — 45 s, 90 s pause",
-        "Maximum — 60 s, 30 s pause",
-        "Custom settings",
-    ]
-    # 16 s / 500 s from the vendor app matches no preset.
-    assert state.attributes["current_activity"] == "Custom settings"
+    assert registry.async_get("remote.tv") is None
 
-    await hass.services.async_call(
-        "remote", "turn_on", {"entity_id": MODES, "activity": "Standard — 16 s, 8 min pause"}, blocking=True
-    )
-    assert (diffuser.modes[0].run_seconds, diffuser.modes[0].pause_seconds) == (16, 480)
-    assert hass.states.get(MODES).attributes["current_activity"] == "Standard — 16 s, 8 min pause"
 
-    await hass.services.async_call("remote", "turn_off", {"entity_id": MODES}, blocking=True)
-    assert diffuser.power is False
-    assert hass.states.get(MODES).state == "off"
-    # Picking a mode while off also switches the diffuser on.
-    await hass.services.async_call(
-        "remote", "turn_on", {"entity_id": MODES, "activity": "Maximum — 60 s, 30 s pause"}, blocking=True
-    )
+def cycle(diffuser) -> tuple[int, int]:
+    return diffuser.modes[0].run_seconds, diffuser.modes[0].pause_seconds
+
+
+async def press(hass, entity_id) -> None:
+    await hass.services.async_call("button", "press", {"entity_id": entity_id}, blocking=True)
+
+
+async def test_mode_buttons(hass, bluetooth, links, diffuser) -> None:
+    await setup_entry(hass)
+    expected = {"minimum": (8, 900), "eco": (10, 600), "balanced": (12, 480), "rich": (16, 300)}
+    for key, values in expected.items():
+        await press(hass, BUTTONS[key])
+        assert cycle(diffuser) == values
+    # Weakest first, and every mode uses less oil per hour than the next.
+    duty = [run / (run + pause) for run, pause in expected.values()]
+    assert duty == sorted(duty)
+
+    # A mode press also switches the diffuser on.
+    await hass.services.async_call("humidifier", "turn_off", {"entity_id": DIFFUSER}, blocking=True)
+    await press(hass, BUTTONS["eco"])
     assert diffuser.power is True
-    assert (diffuser.modes[0].run_seconds, diffuser.modes[0].pause_seconds) == (60, 30)
-    # "Custom settings" leaves the values alone.
+
+
+async def later(hass, minutes: int) -> None:
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=minutes))
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+async def test_guests_boost_restores(hass, bluetooth, links, diffuser) -> None:
+    await setup_entry(hass)
+    await press(hass, BUTTONS["eco"])
+    await press(hass, BUTTONS["guests_for_20_min"])
+    assert cycle(diffuser) == (30, 120)
+    await later(hass, 19)
+    assert cycle(diffuser) == (30, 120)
+    await later(hass, 21)
+    assert cycle(diffuser) == (10, 600)
+
+
+async def test_second_boost_press_keeps_original(hass, bluetooth, links, diffuser) -> None:
+    await setup_entry(hass)
+    await press(hass, BUTTONS["eco"])
+    await press(hass, BUTTONS["guests_for_20_min"])
+    await press(hass, BUTTONS["guests_for_20_min"])
+    await later(hass, 21)
+    assert cycle(diffuser) == (10, 600)
+
+
+async def test_mode_press_ends_boost(hass, bluetooth, links, diffuser) -> None:
+    await setup_entry(hass)
+    await press(hass, BUTTONS["eco"])
+    await press(hass, BUTTONS["guests_for_20_min"])
+    await press(hass, BUTTONS["rich"])
+    await later(hass, 25)
+    assert cycle(diffuser) == (16, 300)
+
+
+async def test_boost_left_alone_if_changed(hass, bluetooth, links, diffuser) -> None:
+    await setup_entry(hass)
+    await press(hass, BUTTONS["eco"])
+    await press(hass, BUTTONS["guests_for_20_min"])
     await hass.services.async_call(
-        "remote", "turn_on", {"entity_id": MODES, "activity": "Custom settings"}, blocking=True
+        "humidifier", "set_humidity", {"entity_id": DIFFUSER, "humidity": 100}, blocking=True
     )
-    assert (diffuser.modes[0].run_seconds, diffuser.modes[0].pause_seconds) == (60, 30)
-
-
-def test_russian_preset_labels() -> None:
-    labels = preset_labels("ru")
-    assert labels["standard"] == "Стандарт — 16 с, пауза 8 мин"
-    assert labels["max"] == "Максимум — 60 с, пауза 30 с"
-    assert labels["custom"] == "Свои настройки"
+    await later(hass, 25)
+    assert cycle(diffuser) == (30, 30)
 
 
 async def test_mode_entities_and_service(hass, bluetooth, links, diffuser) -> None:

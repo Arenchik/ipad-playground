@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
-from .test_init import DIFFUSER, LAMP, MODES, SPRAY, bluetooth, setup_entry  # noqa: F401
+from .test_init import BUTTONS, DIFFUSER, LAMP, SPRAY, bluetooth, setup_entry  # noqa: F401
 
 pytest.importorskip("pyhap")
 
@@ -19,7 +19,7 @@ from homeassistant.components.homekit.util import state_needs_accessory_mode  # 
 from pyhap.const import (  # noqa: E402
     CATEGORY_HUMIDIFIER,
     CATEGORY_LIGHTBULB,
-    CATEGORY_TELEVISION,
+    CATEGORY_SWITCH,
     HAP_REPR_AID,
     HAP_REPR_CHARS,
     HAP_REPR_IID,
@@ -128,25 +128,22 @@ async def test_home_app_controls_diffuser(hass, bluetooth, links, diffuser, hk_d
     assert diffuser.light == 3
 
 
-async def test_home_app_scent_mode_list(hass, bluetooth, links, diffuser, hk_driver) -> None:  # noqa: F811
+async def test_home_app_mode_buttons(hass, bluetooth, links, diffuser, hk_driver) -> None:  # noqa: F811
     await setup_entry(hass)
-    state = hass.states.get(MODES)
-    # A TV-style accessory: paired on its own, the bridge sets that up.
-    assert state_needs_accessory_mode(state)
+    state = hass.states.get(BUTTONS["eco"])
+    # Bridged like any switch: no separate pairing needed.
+    assert not state_needs_accessory_mode(state)
 
-    tv = get_accessory(hass, hk_driver, state, 1, {})
-    assert type(tv).__name__ == "ActivityRemote" and tv.category == CATEGORY_TELEVISION
-    assert tv.sources == state.attributes["activity_list"]
-    hk_driver.add_accessory(tv)
-    tv.run()
+    eco = get_accessory(hass, hk_driver, state, 1, {})
+    assert type(eco).__name__ == "Switch" and eco.category == CATEGORY_SWITCH
+    assert eco.activate_only
+    hk_driver.add_accessory(eco)
+    eco.run()
     await hass.async_block_till_done()
-    assert tv.char_active.value == 1
-    assert tv.sources[tv.char_input_source.value] == "Custom settings"
 
-    rich = tv.sources.index("Rich — 20 s, 5 min pause")
-    await _set(hass, hk_driver, tv, tv.char_input_source, rich)
-    assert (diffuser.modes[0].run_seconds, diffuser.modes[0].pause_seconds) == (20, 300)
-    assert tv.char_input_source.value == rich
-
-    await _set(hass, hk_driver, tv, tv.char_active, 0)
-    assert diffuser.power is False
+    await _set(hass, hk_driver, eco, eco.char_on, True)
+    assert (diffuser.modes[0].run_seconds, diffuser.modes[0].pause_seconds) == (10, 600)
+    # The tile springs back off (after 10 s), ready for the next tap.
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert eco.char_on.value is False

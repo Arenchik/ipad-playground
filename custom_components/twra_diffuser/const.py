@@ -17,17 +17,20 @@ MAX_PAUSE = 900
 # Spray durations offered as buttons; 16 s matches the tested unit's mode.
 SPRAY_TIMES: tuple[int, ...] = (5, 10, 16, 20, 30, 45, 60)
 
-# Named scent modes for the HomeKit pop-up list: key, spray s, pause s.
+# Scent modes offered as buttons: key, spray s, pause s. Short bursts with
+# long pauses: the nose stops noticing a constant scent, so spacing the
+# sprays keeps it perceptible while using less oil. Ordered weakest first.
 SCENT_PRESETS: tuple[tuple[str, int, int], ...] = (
-    ("faint", 5, 900),
-    ("light", 10, 600),
-    ("standard", 16, 480),
-    ("rich", 20, 300),
-    ("strong", 30, 180),
-    ("intense", 45, 90),
-    ("max", 60, 30),
+    ("minimum", 8, 900),
+    ("eco", 10, 600),
+    ("balanced", 12, 480),
+    ("rich", 16, 300),
 )
-PRESET_CUSTOM = "custom"
+
+# "Guests": a strong burst that hands the previous settings back after a while.
+BOOST_RUN = 30
+BOOST_PAUSE = 120
+BOOST_DURATION = timedelta(minutes=20)
 
 SERVICE_SET_WORKING_MODE = "set_working_mode"
 ATTR_DEVICE_ID = "device_id"

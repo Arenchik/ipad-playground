@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 # Imported as dt_time: once the time platform loads, the package attribute
 # `time` is that submodule.
@@ -51,10 +52,10 @@ from .twra import WEEKDAYS, InvalidPassword, PasswordRequired, TwraClient, TwraE
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [
+    Platform.BUTTON,
     Platform.HUMIDIFIER,
     Platform.LIGHT,
     Platform.NUMBER,
-    Platform.REMOTE,
     Platform.SELECT,
     Platform.SWITCH,
     Platform.TIME,
@@ -81,6 +82,15 @@ class TwraData:
     mode_serials: frozenset[int]
     reconnect_task: asyncio.Task | None = field(default=None)
     closing: bool = False
+    # Guest boost: settings to restore and the timer that restores them.
+    boost_restore: tuple[int, int] | None = None
+    boost_unsub: Callable[[], None] | None = None
+
+    def cancel_boost(self) -> None:
+        if self.boost_unsub is not None:
+            self.boost_unsub()
+            self.boost_unsub = None
+        self.boost_restore = None
 
 
 type TwraConfigEntry = ConfigEntry[TwraData]
@@ -181,10 +191,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
     data = TwraData(client, frozenset(m.serial for m in client.state.modes))
     entry.runtime_data = data
 
-    # 1.0 exposed the diffuser as a fan; it is a humidifier since 1.1.
+    # Entities dropped by later versions: the 1.0 fan, the 1.2 TV remote.
     registry = er.async_get(hass)
-    if old_fan := registry.async_get_entity_id("fan", DOMAIN, f"{client.address}_diffuser"):
-        registry.async_remove(old_fan)
+    for domain, key in (("fan", "diffuser"), ("remote", "scent_modes")):
+        if old := registry.async_get_entity_id(domain, DOMAIN, f"{client.address}_{key}"):
+            registry.async_remove(old)
 
     async def _reconnect() -> None:
         delay = 5
@@ -262,5 +273,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> boo
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
         entry.runtime_data.closing = True
+        entry.runtime_data.cancel_boost()
         await entry.runtime_data.client.disconnect()
     return unloaded
