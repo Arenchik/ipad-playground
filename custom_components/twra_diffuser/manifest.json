@@ -1,0 +1,16 @@
+{
+  "domain": "twra_diffuser",
+  "name": "TWRA Aroma Diffuser",
+  "bluetooth": [
+    { "local_name": "TWRA*", "connectable": true }
+  ],
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["bluetooth_adapters"],
+  "documentation": "https://github.com/Arenchik/ipad-playground",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/Arenchik/ipad-playground/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}

@@ -1,0 +1,161 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "description": "Choose the diffuser to set up.",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "confirm": {
+        "description": "Set up {name}? Close the vendor app on your phone first: the diffuser accepts only one connection.",
+        "data": {
+          "name": "Name"
+        },
+        "data_description": {
+          "name": "Shown in Home Assistant and, later, in the Apple Home app."
+        }
+      },
+      "password": {
+        "description": "The diffuser is protected by an app password.",
+        "data": {
+          "password": "Password (4 characters)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect. Make sure the phone app is closed and the diffuser is in range of a Bluetooth adapter or proxy.",
+      "invalid_password": "Wrong password."
+    },
+    "abort": {
+      "already_configured": "This diffuser is already configured.",
+      "no_devices_found": "No TWRA diffusers found nearby."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "keep_connected": "Keep the Bluetooth connection open"
+        },
+        "data_description": {
+          "keep_connected": "Instant control and live state. Turn off to let the phone app connect between commands (control then takes a few seconds)."
+        }
+      }
+    }
+  },
+  "entity": {
+    "light": {
+      "lamp": {
+        "name": "Lamp",
+        "state_attributes": {
+          "effect": {
+            "state": {
+              "white": "White",
+              "cyan": "Cyan",
+              "amber": "Amber"
+            }
+          }
+        }
+      }
+    },
+    "switch": {
+      "mode_enabled": {
+        "name": "Mode {mode}"
+      }
+    },
+    "number": {
+      "mode_run": {
+        "name": "Mode {mode} spray time"
+      },
+      "mode_pause": {
+        "name": "Mode {mode} pause"
+      }
+    },
+    "time": {
+      "mode_start": {
+        "name": "Mode {mode} start"
+      },
+      "mode_end": {
+        "name": "Mode {mode} end"
+      }
+    }
+  },
+  "exceptions": {
+    "command_failed": {
+      "message": "The diffuser did not accept the command: {error}"
+    },
+    "no_enabled_mode": {
+      "message": "Intensity is set through the working modes, and none is enabled."
+    },
+    "unknown_mode": {
+      "message": "The diffuser has no working mode {mode}. Create it in the vendor app first."
+    },
+    "unknown_device": {
+      "message": "Not a TWRA diffuser."
+    },
+    "not_found": {
+      "message": "Diffuser {address} is not in range of any connectable Bluetooth adapter or proxy."
+    },
+    "cannot_connect": {
+      "message": "Could not connect to the diffuser: {error}"
+    },
+    "invalid_password": {
+      "message": "The diffuser rejected the password. Remove and re-add the integration."
+    }
+  },
+  "selector": {
+    "weekday": {
+      "options": {
+        "mon": "Monday",
+        "tue": "Tuesday",
+        "wed": "Wednesday",
+        "thu": "Thursday",
+        "fri": "Friday",
+        "sat": "Saturday",
+        "sun": "Sunday"
+      }
+    }
+  },
+  "services": {
+    "set_working_mode": {
+      "name": "Set working mode",
+      "description": "Change a working mode (schedule) stored on the diffuser. Only the fields you fill in are changed.",
+      "fields": {
+        "device_id": {
+          "name": "Diffuser",
+          "description": "The diffuser to change."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Working mode number, as in the app."
+        },
+        "enabled": {
+          "name": "Enabled",
+          "description": "Turn the mode on or off."
+        },
+        "days": {
+          "name": "Days",
+          "description": "Days the mode runs on."
+        },
+        "start": {
+          "name": "Start",
+          "description": "Daily start time."
+        },
+        "end": {
+          "name": "End",
+          "description": "Daily end time."
+        },
+        "run_seconds": {
+          "name": "Spray time",
+          "description": "Seconds of spraying per cycle."
+        },
+        "pause_seconds": {
+          "name": "Pause",
+          "description": "Seconds of pause per cycle."
+        }
+      }
+    }
+  }
+}
