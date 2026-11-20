@@ -10,11 +10,10 @@ from __future__ import annotations
 from homeassistant.components.select import SelectEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import TwraConfigEntry, async_run_command
-from .const import DOMAIN, SPRAY_TIMES
+from . import TwraConfigEntry, async_apply_cycle
+from .const import SPRAY_TIMES
 from .entity import TwraEntity
 
 
@@ -47,12 +46,4 @@ class TwraSprayTime(TwraEntity, SelectEntity):
         )
 
     async def async_select_option(self, option: str) -> None:
-        modes = [m for m in self._client.state.modes if m.enabled]
-        if not modes:
-            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_enabled_mode")
-        seconds = self._seconds[option]
-        for mode in modes:
-            if mode.run_seconds != seconds:
-                await async_run_command(
-                    self._client.update_mode(mode.with_changes(run_seconds=seconds))
-                )
+        await async_apply_cycle(self._client, run_seconds=self._seconds[option])

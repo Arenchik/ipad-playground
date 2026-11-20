@@ -5,9 +5,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-# Imported as dt_time: once the time platform loads, the package attribute
-# `time` is that submodule.
-from datetime import datetime, time as dt_time
+from datetime import datetime
 
 import voluptuous as vol
 from bleak.exc import BleakError
@@ -31,23 +29,25 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    ATTR_DAYS,
     ATTR_DEVICE_ID,
-    ATTR_ENABLED,
-    ATTR_END,
-    ATTR_MODE,
     ATTR_PAUSE_SECONDS,
     ATTR_RUN_SECONDS,
-    ATTR_START,
     CONF_KEEP_CONNECTED,
     DEFAULT_KEEP_CONNECTED,
     DOMAIN,
     IDLE_TIMEOUT,
     REFRESH_INTERVAL,
-    SERVICE_SET_WORKING_MODE,
+    SERVICE_SET_SPRAY_CYCLE,
     TIME_SYNC_INTERVAL,
 )
-from .twra import WEEKDAYS, InvalidPassword, PasswordRequired, TwraClient, TwraError
+from .twra import (
+    WEEKDAYS,
+    InvalidPassword,
+    PasswordRequired,
+    TwraClient,
+    TwraError,
+    WorkingMode,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,22 +57,18 @@ PLATFORMS = [
     Platform.LIGHT,
     Platform.NUMBER,
     Platform.SELECT,
-    Platform.SWITCH,
-    Platform.TIME,
 ]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-SET_WORKING_MODE_SCHEMA = vol.Schema(
-    {
-        vol.Required(ATTR_DEVICE_ID): cv.string,
-        vol.Required(ATTR_MODE): vol.All(vol.Coerce(int), vol.Range(min=1, max=5)),
-        vol.Optional(ATTR_ENABLED): cv.boolean,
-        vol.Optional(ATTR_DAYS): vol.All(cv.ensure_list, [vol.In(WEEKDAYS)]),
-        vol.Optional(ATTR_START): cv.time,
-        vol.Optional(ATTR_END): cv.time,
-        vol.Optional(ATTR_RUN_SECONDS): vol.All(vol.Coerce(int), vol.Range(min=1, max=600)),
-        vol.Optional(ATTR_PAUSE_SECONDS): vol.All(vol.Coerce(int), vol.Range(min=1, max=3600)),
-    }
+SET_SPRAY_CYCLE_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Required(ATTR_DEVICE_ID): cv.string,
+            vol.Optional(ATTR_RUN_SECONDS): vol.All(vol.Coerce(int), vol.Range(min=1, max=600)),
+            vol.Optional(ATTR_PAUSE_SECONDS): vol.All(vol.Coerce(int), vol.Range(min=1, max=3600)),
+        }
+    ),
+    cv.has_at_least_one_key(ATTR_RUN_SECONDS, ATTR_PAUSE_SECONDS),
 )
 
 
@@ -96,42 +92,16 @@ class TwraData:
 type TwraConfigEntry = ConfigEntry[TwraData]
 
 
-def minute_to_time(minute: int) -> dt_time:
-    return dt_time(minute // 60 % 24, minute % 60)
-
-
-def time_to_minute(value: dt_time) -> int:
-    return value.hour * 60 + value.minute
-
-
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    async def handle_set_working_mode(call: ServiceCall) -> None:
+    async def handle_set_spray_cycle(call: ServiceCall) -> None:
         client = _client_for_device(hass, call.data[ATTR_DEVICE_ID])
-        number = call.data[ATTR_MODE]
-        mode = next((m for m in client.state.modes if m.serial == number), None)
-        if mode is None:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="unknown_mode",
-                translation_placeholders={"mode": str(number)},
-            )
-        if ATTR_DAYS in call.data:
-            mode = mode.with_days(call.data[ATTR_DAYS])
-        changes = {}
-        if ATTR_ENABLED in call.data:
-            changes["enabled"] = call.data[ATTR_ENABLED]
-        if ATTR_START in call.data:
-            changes["start_minute"] = time_to_minute(call.data[ATTR_START])
-        if ATTR_END in call.data:
-            changes["end_minute"] = time_to_minute(call.data[ATTR_END])
-        if ATTR_RUN_SECONDS in call.data:
-            changes["run_seconds"] = call.data[ATTR_RUN_SECONDS]
-        if ATTR_PAUSE_SECONDS in call.data:
-            changes["pause_seconds"] = call.data[ATTR_PAUSE_SECONDS]
-        await async_run_command(client.update_mode(mode.with_changes(**changes)))
+        changes = {
+            key: call.data[key] for key in (ATTR_RUN_SECONDS, ATTR_PAUSE_SECONDS) if key in call.data
+        }
+        await async_apply_cycle(client, **changes)
 
     hass.services.async_register(
-        DOMAIN, SERVICE_SET_WORKING_MODE, handle_set_working_mode, SET_WORKING_MODE_SCHEMA
+        DOMAIN, SERVICE_SET_SPRAY_CYCLE, handle_set_spray_cycle, SET_SPRAY_CYCLE_SCHEMA
     )
     return True
 
@@ -156,6 +126,31 @@ async def async_run_command(command) -> None:
             translation_key="command_failed",
             translation_placeholders={"error": str(err) or type(err).__name__},
         ) from err
+
+
+FULL_DAY_END = 23 * 60 + 59
+
+
+def full_time(mode: WorkingMode) -> WorkingMode:
+    """The mode running every day, all day; days are left to automations."""
+    return mode.with_days(list(WEEKDAYS)).with_changes(
+        enabled=True, start_minute=0, end_minute=FULL_DAY_END
+    )
+
+
+async def async_apply_cycle(client: TwraClient, **changes: int) -> None:
+    """Write spray/pause `changes` into the working modes, kept full-time.
+
+    Uses the enabled modes, or the first one if none is enabled, so a
+    mode switched off in the vendor app comes back on.
+    """
+    modes = [m for m in client.state.modes if m.enabled] or list(client.state.modes[:1])
+    if not modes:
+        raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_enabled_mode")
+    for mode in modes:
+        target = full_time(mode).with_changes(**changes)
+        if target != mode:
+            await async_run_command(client.update_mode(target))
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool:
@@ -188,14 +183,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
             translation_placeholders={"error": str(err) or type(err).__name__},
         ) from err
 
+    # Days and hours belong to the user's automations: lift any schedule
+    # set in the vendor app so the diffuser can spray whenever it is on.
+    try:
+        await async_apply_cycle(client)
+    except HomeAssistantError as err:
+        _LOGGER.warning("%s: could not open the schedule to all day: %s", client.name, err)
+
     data = TwraData(client, frozenset(m.serial for m in client.state.modes))
     entry.runtime_data = data
 
-    # Entities dropped by later versions: the 1.0 fan, the 1.2 TV remote.
+    # Entities of platforms later versions dropped (fan, remote, the
+    # schedule switches and times).
     registry = er.async_get(hass)
-    for domain, key in (("fan", "diffuser"), ("remote", "scent_modes")):
-        if old := registry.async_get_entity_id(domain, DOMAIN, f"{client.address}_{key}"):
-            registry.async_remove(old)
+    platforms = {str(platform) for platform in PLATFORMS}
+    for old in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if old.domain not in platforms:
+            registry.async_remove(old.entity_id)
 
     async def _reconnect() -> None:
         delay = 5

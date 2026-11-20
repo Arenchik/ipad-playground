@@ -6,7 +6,7 @@ from homeassistant.const import EntityCategory, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import TwraConfigEntry, async_run_command
+from . import TwraConfigEntry, async_run_command, full_time
 from .entity import TwraModeEntity
 
 FIELDS = {
@@ -49,5 +49,5 @@ class TwraModeNumber(TwraModeEntity, NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         if (mode := self.mode) is not None:
             await async_run_command(
-                self._client.update_mode(mode.with_changes(**{self._field: int(value)}))
+                self._client.update_mode(full_time(mode).with_changes(**{self._field: int(value)}))
             )

@@ -32,12 +32,7 @@ BOOST_RUN = 30
 BOOST_PAUSE = 120
 BOOST_DURATION = timedelta(minutes=20)
 
-SERVICE_SET_WORKING_MODE = "set_working_mode"
+SERVICE_SET_SPRAY_CYCLE = "set_spray_cycle"
 ATTR_DEVICE_ID = "device_id"
-ATTR_MODE = "mode"
-ATTR_ENABLED = "enabled"
-ATTR_DAYS = "days"
-ATTR_START = "start"
-ATTR_END = "end"
 ATTR_RUN_SECONDS = "run_seconds"
 ATTR_PAUSE_SECONDS = "pause_seconds"

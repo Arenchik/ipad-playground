@@ -86,25 +86,12 @@
         "name": "Spray time"
       }
     },
-    "switch": {
-      "mode_enabled": {
-        "name": "Mode {mode}"
-      }
-    },
     "number": {
       "mode_run": {
         "name": "Mode {mode} spray time"
       },
       "mode_pause": {
         "name": "Mode {mode} pause"
-      }
-    },
-    "time": {
-      "mode_start": {
-        "name": "Mode {mode} start"
-      },
-      "mode_end": {
-        "name": "Mode {mode} end"
       }
     }
   },
@@ -113,10 +100,7 @@
       "message": "The diffuser did not accept the command: {error}"
     },
     "no_enabled_mode": {
-      "message": "Intensity and spray time are stored in the working modes, and none is enabled. Enable a mode first."
-    },
-    "unknown_mode": {
-      "message": "The diffuser has no working mode {mode}. Create it in the vendor app first."
+      "message": "The diffuser has no working mode yet. Create one in the Aroma Diffuser app."
     },
     "unknown_device": {
       "message": "Not a TWRA diffuser."
@@ -131,47 +115,14 @@
       "message": "The diffuser rejected the password. Remove and re-add the integration."
     }
   },
-  "selector": {
-    "weekday": {
-      "options": {
-        "mon": "Monday",
-        "tue": "Tuesday",
-        "wed": "Wednesday",
-        "thu": "Thursday",
-        "fri": "Friday",
-        "sat": "Saturday",
-        "sun": "Sunday"
-      }
-    }
-  },
   "services": {
-    "set_working_mode": {
-      "name": "Set working mode",
-      "description": "Change a working mode (schedule) stored on the diffuser. Only the fields you fill in are changed.",
+    "set_spray_cycle": {
+      "name": "Set spray cycle",
+      "description": "Set spray and pause seconds. The diffuser keeps running all day, every day; switch it on and off with automations.",
       "fields": {
         "device_id": {
           "name": "Diffuser",
           "description": "The diffuser to change."
-        },
-        "mode": {
-          "name": "Mode",
-          "description": "Working mode number, as in the app."
-        },
-        "enabled": {
-          "name": "Enabled",
-          "description": "Turn the mode on or off."
-        },
-        "days": {
-          "name": "Days",
-          "description": "Days the mode runs on."
-        },
-        "start": {
-          "name": "Start",
-          "description": "Daily start time."
-        },
-        "end": {
-          "name": "End",
-          "description": "Daily end time."
         },
         "run_seconds": {
           "name": "Spray time",

@@ -18,13 +18,12 @@ from homeassistant.components.humidifier import (
     HumidifierEntity,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
 
-from . import TwraConfigEntry, async_run_command
-from .const import DOMAIN, MAX_PAUSE, MIN_PAUSE
+from . import TwraConfigEntry, async_apply_cycle, async_run_command
+from .const import MAX_PAUSE, MIN_PAUSE
 from .entity import TwraEntity
 from .twra import WorkingMode
 
@@ -136,14 +135,6 @@ class TwraDiffuser(TwraEntity, HumidifierEntity):
         await async_run_command(self._client.set_power(False))
 
     async def async_set_humidity(self, humidity: int) -> None:
-        modes = self._enabled_modes
-        if not modes:
-            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_enabled_mode")
-        pause = pause_for_intensity(humidity)
         self._requested = int(humidity)
-        for mode in modes:
-            if mode.pause_seconds != pause:
-                await async_run_command(
-                    self._client.update_mode(mode.with_changes(pause_seconds=pause))
-                )
+        await async_apply_cycle(self._client, pause_seconds=pause_for_intensity(humidity))
         self.async_write_ha_state()

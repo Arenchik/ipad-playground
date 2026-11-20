@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
+import voluptuous as vol
 from homeassistant.config_entries import SOURCE_BLUETOOTH, SOURCE_USER, ConfigEntryState
 from homeassistant.const import CONF_ADDRESS, CONF_NAME, EntityCategory
 from homeassistant.core import HomeAssistant
@@ -31,7 +32,6 @@ BUTTONS = {
 }
 SPRAY = "select.aroma_diffuser_spray_time"
 LAMP = "light.aroma_diffuser_lamp"
-MODE = "switch.aroma_diffuser_mode_1"
 
 
 def service_info(ble_device):
@@ -133,11 +133,8 @@ async def test_entities_and_homekit_shape(hass, bluetooth, links, diffuser) -> N
         LAMP,
         SPRAY,
         *BUTTONS.values(),
-        MODE,
         "number.aroma_diffuser_mode_1_spray_time",
         "number.aroma_diffuser_mode_1_pause",
-        "time.aroma_diffuser_mode_1_start",
-        "time.aroma_diffuser_mode_1_end",
     }
     # HomeKit Bridge only picks up entities without a category.
     exposed = {eid for eid, e in entities.items() if e.entity_category is None}
@@ -158,8 +155,6 @@ async def test_entities_and_homekit_shape(hass, bluetooth, links, diffuser) -> N
     assert hass.states.get(SPRAY).state == "16 s"
     assert hass.states.get(LAMP).state == "on"
     assert hass.states.get(LAMP).attributes["effect"] == "white"
-    assert hass.states.get(MODE).attributes["days"] == ["mon", "wed", "fri", "sun"]
-    assert hass.states.get("time.aroma_diffuser_mode_1_end").state == "23:59:00"
 
 
 async def test_spray_time_leaves_homekit_after_upgrade(hass, bluetooth, links, diffuser) -> None:
@@ -170,13 +165,6 @@ async def test_spray_time_leaves_homekit_after_upgrade(hass, bluetooth, links, d
     )
     await setup_entry(hass)
     assert registry.async_get(SPRAY).entity_category is EntityCategory.CONFIG
-
-
-async def test_old_fan_entity_removed(hass, bluetooth, links, diffuser) -> None:
-    registry = er.async_get(hass)
-    registry.async_get_or_create("fan", DOMAIN, f"{ADDRESS}_diffuser", suggested_object_id="old")
-    await setup_entry(hass)
-    assert registry.async_get("fan.old") is None
 
 
 async def test_diffuser_controls(hass, bluetooth, links, diffuser) -> None:
@@ -211,14 +199,67 @@ async def test_spray_time_select(hass, bluetooth, links, diffuser) -> None:
     assert hass.states.get(SPRAY).state == "30 s"
 
 
-async def test_needs_an_enabled_mode(hass, bluetooth, links, diffuser) -> None:
+ALL_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def assert_full_time(mode) -> None:
+    assert mode.enabled
+    assert mode.days == ALL_DAYS
+    assert (mode.start_minute, mode.end_minute) == (0, 23 * 60 + 59)
+
+
+async def test_setup_opens_schedule_to_every_day(hass, bluetooth, links, diffuser) -> None:
+    # The unit came with Mon/Wed/Fri/Sun only, from the vendor app.
+    assert diffuser.modes[0].days == ["mon", "wed", "fri", "sun"]
+    await setup_entry(hass)
+    assert_full_time(diffuser.modes[0])
+    # Only the schedule changes, not how much it sprays.
+    assert cycle(diffuser) == (16, 500)
+
+
+async def test_setup_reenables_a_disabled_mode(hass, bluetooth, links, diffuser) -> None:
     diffuser.modes = [diffuser.modes[0].with_changes(enabled=False)]
     await setup_entry(hass)
-    assert hass.states.get(SPRAY).state == "unknown"
-    with pytest.raises(HomeAssistantError, match="none is enabled"):
-        await hass.services.async_call(
-            "humidifier", "set_humidity", {"entity_id": DIFFUSER, "humidity": 50}, blocking=True
-        )
+    assert_full_time(diffuser.modes[0])
+    assert hass.states.get(SPRAY).state == "16 s"
+
+
+async def test_buttons_reopen_a_schedule_changed_in_app(hass, bluetooth, links, diffuser) -> None:
+    entry = await setup_entry(hass)
+    # Narrowed again in the vendor app; HA picks it up on its next read.
+    diffuser.modes = [diffuser.modes[0].with_days(["sat"]).with_changes(start_minute=600)]
+    await entry.runtime_data.client.refresh()
+    await press(hass, BUTTONS["balanced"])
+    assert_full_time(diffuser.modes[0])
+    assert cycle(diffuser) == (12, 480)
+
+
+async def test_no_working_mode_at_all(hass, bluetooth, links, diffuser) -> None:
+    diffuser.modes = []
+    await setup_entry(hass)
+    with pytest.raises(HomeAssistantError, match="no working mode"):
+        await press(hass, BUTTONS["eco"])
+
+
+async def test_entities_of_dropped_platforms_removed(hass, bluetooth, links, diffuser) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="Aroma Diffuser", unique_id=ADDRESS, data={CONF_ADDRESS: ADDRESS}
+    )
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    # 1.0 fan, 1.2 TV remote, schedule switch and times from before 1.4.
+    for domain, key in (
+        ("fan", "diffuser"),
+        ("remote", "scent_modes"),
+        ("switch", "mode1_enabled"),
+        ("time", "mode1_start"),
+        ("time", "mode1_end"),
+    ):
+        registry.async_get_or_create(domain, DOMAIN, f"{ADDRESS}_{key}", config_entry=entry)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    domains = {e.domain for e in er.async_entries_for_config_entry(registry, entry.entry_id)}
+    assert domains == {"button", "humidifier", "light", "number", "select"}
 
 
 def test_intensity_scale() -> None:
@@ -277,13 +318,6 @@ async def test_lamp_ignores_amber_set_in_app(hass, bluetooth, links, diffuser) -
     await hass.services.async_call("light", "turn_off", {"entity_id": LAMP}, blocking=True)
     await hass.services.async_call("light", "turn_on", {"entity_id": LAMP}, blocking=True)
     assert diffuser.light == 0
-
-
-async def test_old_remote_entity_removed(hass, bluetooth, links, diffuser) -> None:
-    registry = er.async_get(hass)
-    registry.async_get_or_create("remote", DOMAIN, f"{ADDRESS}_scent_modes", suggested_object_id="tv")
-    await setup_entry(hass)
-    assert registry.async_get("remote.tv") is None
 
 
 def cycle(diffuser) -> tuple[int, int]:
@@ -355,11 +389,8 @@ async def test_boost_left_alone_if_changed(hass, bluetooth, links, diffuser) -> 
     assert cycle(diffuser) == (30, 30)
 
 
-async def test_mode_entities_and_service(hass, bluetooth, links, diffuser) -> None:
+async def test_number_entities_and_service(hass, bluetooth, links, diffuser) -> None:
     entry = await setup_entry(hass)
-
-    await hass.services.async_call("switch", "turn_off", {"entity_id": MODE}, blocking=True)
-    assert diffuser.modes[0].enabled is False
     await hass.services.async_call(
         "number",
         "set_value",
@@ -367,24 +398,19 @@ async def test_mode_entities_and_service(hass, bluetooth, links, diffuser) -> No
         blocking=True,
     )
     assert diffuser.modes[0].run_seconds == 20
-    await hass.services.async_call(
-        "time",
-        "set_value",
-        {"entity_id": "time.aroma_diffuser_mode_1_start", "time": "08:30"},
-        blocking=True,
-    )
-    assert diffuser.modes[0].start_minute == 8 * 60 + 30
+    assert_full_time(diffuser.modes[0])
 
     (device,) = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
     await hass.services.async_call(
         DOMAIN,
-        "set_working_mode",
-        {"device_id": device.id, "mode": 1, "enabled": True, "days": ["sat", "sun"], "end": "22:00"},
+        "set_spray_cycle",
+        {"device_id": device.id, "run_seconds": 14, "pause_seconds": 700},
         blocking=True,
     )
-    mode = diffuser.modes[0]
-    assert mode.enabled and mode.days == ["sat", "sun"] and mode.end_minute == 22 * 60
-    assert hass.states.get(MODE).state == "on"
+    assert cycle(diffuser) == (14, 700)
+    assert_full_time(diffuser.modes[0])
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "set_spray_cycle", {"device_id": device.id}, blocking=True)
 
 
 async def test_unavailable_then_reconnects(hass, bluetooth, links, diffuser) -> None:

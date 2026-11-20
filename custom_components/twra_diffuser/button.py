@@ -16,7 +16,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_call_later
 
-from . import TwraConfigEntry, async_run_command
+from . import TwraConfigEntry, async_apply_cycle, async_run_command
 from .const import BOOST_DURATION, BOOST_PAUSE, BOOST_RUN, DOMAIN, SCENT_PRESETS
 from .entity import TwraEntity
 from .twra import TwraClient
@@ -35,15 +35,8 @@ async def async_setup_entry(
 
 
 async def apply_cycle(client: TwraClient, run: int, pause: int) -> None:
-    """Set spray/pause on every enabled working mode and power on."""
-    modes = [m for m in client.state.modes if m.enabled]
-    if not modes:
-        raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_enabled_mode")
-    for mode in modes:
-        if (mode.run_seconds, mode.pause_seconds) != (run, pause):
-            await async_run_command(
-                client.update_mode(mode.with_changes(run_seconds=run, pause_seconds=pause))
-            )
+    """Set spray/pause (all day, every day) and power on."""
+    await async_apply_cycle(client, run_seconds=run, pause_seconds=pause)
     if not client.state.power:
         await async_run_command(client.set_power(True))
 
@@ -73,7 +66,7 @@ class TwraBoostButton(TwraEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         data = self._entry.runtime_data
-        modes = [m for m in self._client.state.modes if m.enabled]
+        modes = [m for m in self._client.state.modes if m.enabled] or self._client.state.modes[:1]
         if not modes:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_enabled_mode")
         # A second press extends the boost but keeps the original settings.
