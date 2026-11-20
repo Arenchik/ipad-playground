@@ -1,6 +1,36 @@
 # TWRA Aroma Diffuser для Home Assistant
 
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories/)
+[![Release](https://img.shields.io/github/v/release/Arenchik/ipad-playground)](https://github.com/Arenchik/ipad-playground/releases/latest)
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.6%2B-41BDF5.svg)
+
 Локальное управление аромадиффузором **Tersway TW-RA01 Smart Tower** (Bluetooth-имя `TWRA01B-…`, приложение «Aroma Diffuser») по Bluetooth, без облака. Интеграция сразу рассчитана на передачу в Apple HomeKit через HomeKit Bridge.
+
+## Быстрая установка
+
+Кнопки открывают нужную страницу прямо в вашем Home Assistant. При первом нажатии сайт My Home Assistant один раз спросит адрес вашего сервера, например `http://homeassistant.local:8123`.
+
+**1. Установить через HACS** (нужен установленный [HACS](https://hacs.xyz/)). Откроется репозиторий в HACS → **Download**:
+
+[![Открыть в HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Arenchik&repository=ipad-playground&category=integration)
+
+**2. Перезапустить Home Assistant**. На открывшейся странице нажмите **Перезапустить**:
+
+[![Перезапуск](https://my.home-assistant.io/badges/server_controls.svg)](https://my.home-assistant.io/redirect/server_controls/)
+
+**3. Добавить диффузор**. Перед этим закройте приложение Aroma Diffuser на телефоне:
+
+[![Добавить интеграцию](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=twra_diffuser)
+
+**4. Передать в Apple HomeKit**. Выберите домены **Fan** и **Light** и отсканируйте QR-код в приложении «Дом»:
+
+[![Добавить HomeKit Bridge](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=homekit)
+
+**Обновления** появляются здесь:
+
+[![Обновления](https://my.home-assistant.io/badges/updates.svg)](https://my.home-assistant.io/redirect/updates/)
+
+Подробности о каждом шаге — ниже.
 
 ## Что умеет
 
