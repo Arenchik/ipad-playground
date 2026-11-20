@@ -60,6 +60,11 @@
         }
       }
     },
+    "select": {
+      "spray_time": {
+        "name": "Spray time"
+      }
+    },
     "switch": {
       "mode_enabled": {
         "name": "Mode {mode}"
@@ -87,7 +92,7 @@
       "message": "The diffuser did not accept the command: {error}"
     },
     "no_enabled_mode": {
-      "message": "Intensity is set through the working modes, and none is enabled."
+      "message": "Intensity and spray time are stored in the working modes, and none is enabled. Enable a mode first."
     },
     "unknown_mode": {
       "message": "The diffuser has no working mode {mode}. Create it in the vendor app first."

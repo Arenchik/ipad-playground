@@ -20,7 +20,11 @@ from homeassistant.exceptions import (
     HomeAssistantError,
     ServiceValidationError,
 )
-from homeassistant.helpers import config_validation as cv, device_registry as dr
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    entity_registry as er,
+)
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
@@ -46,7 +50,14 @@ from .twra import WEEKDAYS, InvalidPassword, PasswordRequired, TwraClient, TwraE
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.FAN, Platform.LIGHT, Platform.NUMBER, Platform.SWITCH, Platform.TIME]
+PLATFORMS = [
+    Platform.HUMIDIFIER,
+    Platform.LIGHT,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SWITCH,
+    Platform.TIME,
+]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 SET_WORKING_MODE_SCHEMA = vol.Schema(
@@ -168,6 +179,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
 
     data = TwraData(client, frozenset(m.serial for m in client.state.modes))
     entry.runtime_data = data
+
+    # 1.0 exposed the diffuser as a fan; it is a humidifier since 1.1.
+    registry = er.async_get(hass)
+    if old_fan := registry.async_get_entity_id("fan", DOMAIN, f"{client.address}_diffuser"):
+        registry.async_remove(old_fan)
 
     async def _reconnect() -> None:
         delay = 5

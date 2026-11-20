@@ -9,14 +9,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
-from .test_init import FAN, LAMP, bluetooth, setup_entry  # noqa: F401
+from .test_init import DIFFUSER, LAMP, SPRAY, bluetooth, setup_entry  # noqa: F401
 
 pytest.importorskip("pyhap")
 
 from homeassistant.components.homekit.accessories import HomeDriver, get_accessory  # noqa: E402
 from homeassistant.components.homekit.iidmanager import AccessoryIIDStorage  # noqa: E402
 from pyhap.const import (  # noqa: E402
-    CATEGORY_FAN,
+    CATEGORY_HUMIDIFIER,
     CATEGORY_LIGHTBULB,
     HAP_REPR_AID,
     HAP_REPR_CHARS,
@@ -71,19 +71,34 @@ async def _settle(hass) -> None:
 async def test_home_app_controls_diffuser(hass, bluetooth, links, diffuser, hk_driver) -> None:  # noqa: F811
     await setup_entry(hass)
 
-    fan = get_accessory(hass, hk_driver, hass.states.get(FAN), 1, {})
-    assert type(fan).__name__ == "Fan" and fan.category == CATEGORY_FAN
-    assert fan.char_speed is not None  # the intensity slider exists
-    hk_driver.add_accessory(fan)
-    fan.run()
+    tile = get_accessory(hass, hk_driver, hass.states.get(DIFFUSER), 1, {})
+    assert type(tile).__name__ == "HumidifierDehumidifier"
+    assert tile.category == CATEGORY_HUMIDIFIER
+    hk_driver.add_accessory(tile)
+    tile.run()
     await hass.async_block_till_done()
-    assert fan.char_active.value == 1
+    assert tile.char_active.value == 1
+    # The tile's big number and its slider both show the intensity.
+    assert tile.char_current_humidity.value == tile.char_target_humidity.value == 18
 
-    await _set(hass, hk_driver, fan, fan.char_speed, 100)
-    assert diffuser.modes[0].pause_seconds == 90
-    await _set(hass, hk_driver, fan, fan.char_active, 0)
+    await _set(hass, hk_driver, tile, tile.char_target_humidity, 100)
+    assert diffuser.modes[0].pause_seconds == 30
+    assert tile.char_target_humidity.value == 100
+    await _set(hass, hk_driver, tile, tile.char_active, 0)
     assert diffuser.power is False
-    assert fan.char_active.value == 0
+    assert tile.char_active.value == 0
+
+    spray = get_accessory(hass, hk_driver, hass.states.get(SPRAY), 1, {})
+    assert type(spray).__name__ == "SelectSwitch"
+    assert list(spray.select_chars) == ["5 s", "10 s", "16 s", "20 s", "30 s", "45 s", "60 s"]
+    hk_driver.add_accessory(spray)
+    spray.run()
+    await hass.async_block_till_done()
+    assert spray.select_chars["16 s"].value is True
+    await _set(hass, hk_driver, spray, spray.select_chars["30 s"], True)
+    assert diffuser.modes[0].run_seconds == 30
+    assert spray.select_chars["30 s"].value is True
+    assert spray.select_chars["16 s"].value is False
 
     lamp = get_accessory(hass, hk_driver, hass.states.get(LAMP), 1, {})
     assert type(lamp).__name__ == "Light" and lamp.category == CATEGORY_LIGHTBULB

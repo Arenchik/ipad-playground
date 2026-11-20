@@ -10,9 +10,12 @@ IDLE_TIMEOUT = 30.0
 REFRESH_INTERVAL = timedelta(minutes=5)
 TIME_SYNC_INTERVAL = timedelta(hours=6)
 
-# Fan speed steps map to the pause between sprays of the enabled working
-# modes, slowest (weakest scent) first. The run time is left alone.
-INTENSITY_PAUSES: tuple[int, ...] = (900, 600, 450, 300, 180, 90)
+# The intensity slider spans these pauses between sprays (1 % -> MAX).
+MIN_PAUSE = 30
+MAX_PAUSE = 900
+
+# Spray durations offered as buttons; 16 s matches the tested unit's mode.
+SPRAY_TIMES: tuple[int, ...] = (5, 10, 16, 20, 30, 45, 60)
 
 SERVICE_SET_WORKING_MODE = "set_working_mode"
 ATTR_DEVICE_ID = "device_id"
