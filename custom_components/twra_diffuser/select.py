@@ -1,13 +1,14 @@
 """Spray duration as a select.
 
-HomeKit Bridge does not carry number entities, but it turns a select
-into one accessory with a switch per option, so the spray time becomes
-a row of labelled buttons in the Home app. The option strings are what
-HomeKit shows, hence the localised unit.
+A config entity: HomeKit Bridge would turn it into one outlet per option,
+which the Home app scatters as bare tiles, so it stays out of HomeKit
+unless included by hand. The scent modes on the remote cover the same
+ground there.
 """
 from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -29,6 +30,7 @@ async def async_setup_entry(
 class TwraSprayTime(TwraEntity, SelectEntity):
     _attr_translation_key = "spray_time"
     _attr_icon = "mdi:spray"
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, entry: TwraConfigEntry, unit: str) -> None:
         super().__init__(entry, "spray_time")

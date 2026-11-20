@@ -138,7 +138,7 @@ async def test_entities_and_homekit_shape(hass, bluetooth, links, diffuser) -> N
     }
     # HomeKit Bridge only picks up entities without a category.
     exposed = {eid for eid, e in entities.items() if e.entity_category is None}
-    assert exposed == {DIFFUSER, LAMP, SPRAY, MODES}
+    assert exposed == {DIFFUSER, LAMP, MODES}
     assert all(
         entities[eid].entity_category is EntityCategory.CONFIG for eid in set(entities) - exposed
     )
@@ -157,6 +157,16 @@ async def test_entities_and_homekit_shape(hass, bluetooth, links, diffuser) -> N
     assert hass.states.get(LAMP).attributes["effect"] == "white"
     assert hass.states.get(MODE).attributes["days"] == ["mon", "wed", "fri", "sun"]
     assert hass.states.get("time.aroma_diffuser_mode_1_end").state == "23:59:00"
+
+
+async def test_spray_time_leaves_homekit_after_upgrade(hass, bluetooth, links, diffuser) -> None:
+    # 1.1 registered it without a category, so HomeKit Bridge exposed it.
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "select", DOMAIN, f"{ADDRESS}_spray_time", suggested_object_id="aroma_diffuser_spray_time"
+    )
+    await setup_entry(hass)
+    assert registry.async_get(SPRAY).entity_category is EntityCategory.CONFIG
 
 
 async def test_old_fan_entity_removed(hass, bluetooth, links, diffuser) -> None:
