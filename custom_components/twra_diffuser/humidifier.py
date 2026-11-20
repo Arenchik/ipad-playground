@@ -1,9 +1,10 @@
-"""The diffuser itself, as a humidifier: power plus scent intensity.
+"""Scent intensity as a humidifier: power plus a percentage slider.
 
 HomeKit has no diffuser service; its humidifier is the closest match (a
 mist icon, an on/off toggle and one percentage slider), and Siri handles
-"set the diffuser to 40%". The slider sets the pause between sprays of
+"set the intensity to 40%". The slider sets the pause between sprays of
 the enabled working modes on a log scale, so low values are fine-grained.
+The named scent modes live on the remote entity.
 """
 from __future__ import annotations
 
@@ -65,7 +66,8 @@ async def async_setup_entry(
 
 
 class TwraDiffuser(TwraEntity, HumidifierEntity):
-    _attr_name = None
+    # Named so the bare percentage in HomeKit reads as "Intensity 21 %".
+    _attr_translation_key = "intensity"
     _attr_device_class = HumidifierDeviceClass.HUMIDIFIER
     _attr_min_humidity = 1
     _attr_max_humidity = 100

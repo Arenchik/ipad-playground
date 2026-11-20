@@ -19,11 +19,13 @@ from custom_components.twra_diffuser.humidifier import (
     mode_active_at,
     pause_for_intensity,
 )
+from custom_components.twra_diffuser.remote import preset_labels
 from custom_components.twra_diffuser.twra import WorkingMode
 
 from .conftest import ADDRESS, NAME
 
-DIFFUSER = "humidifier.aroma_diffuser"
+DIFFUSER = "humidifier.aroma_diffuser_intensity"
+MODES = "remote.aroma_diffuser"
 SPRAY = "select.aroma_diffuser_spray_time"
 LAMP = "light.aroma_diffuser_lamp"
 MODE = "switch.aroma_diffuser_mode_1"
@@ -127,6 +129,7 @@ async def test_entities_and_homekit_shape(hass, bluetooth, links, diffuser) -> N
         DIFFUSER,
         LAMP,
         SPRAY,
+        MODES,
         MODE,
         "number.aroma_diffuser_mode_1_spray_time",
         "number.aroma_diffuser_mode_1_pause",
@@ -135,7 +138,7 @@ async def test_entities_and_homekit_shape(hass, bluetooth, links, diffuser) -> N
     }
     # HomeKit Bridge only picks up entities without a category.
     exposed = {eid for eid, e in entities.items() if e.entity_category is None}
-    assert exposed == {DIFFUSER, LAMP, SPRAY}
+    assert exposed == {DIFFUSER, LAMP, SPRAY, MODES}
     assert all(
         entities[eid].entity_category is EntityCategory.CONFIG for eid in set(entities) - exposed
     )
@@ -229,24 +232,83 @@ def test_schedule_window() -> None:
 async def test_lamp_snaps_homekit_colours(hass, bluetooth, links, diffuser) -> None:
     entry = await setup_entry(hass)
 
+    assert hass.states.get(LAMP).attributes["effect_list"] == ["white", "blue"]
     await hass.services.async_call(
         "light", "turn_on", {"entity_id": LAMP, "hs_color": [210, 90]}, blocking=True
     )
-    assert diffuser.light == 1  # cyan
+    assert diffuser.light == 1  # blue
+    # Any saturated colour, even red, means blue: amber is never chosen.
     await hass.services.async_call(
         "light", "turn_on", {"entity_id": LAMP, "hs_color": [10, 100]}, blocking=True
     )
-    assert diffuser.light == 2  # amber
+    assert diffuser.light == 1
+    await hass.services.async_call(
+        "light", "turn_on", {"entity_id": LAMP, "hs_color": [30, 10]}, blocking=True
+    )
+    assert diffuser.light == 0  # pale -> white
+    await hass.services.async_call(
+        "light", "turn_on", {"entity_id": LAMP, "effect": "blue"}, blocking=True
+    )
     await hass.services.async_call("light", "turn_off", {"entity_id": LAMP}, blocking=True)
     assert diffuser.light == 3
     assert hass.states.get(LAMP).state == "off"
     # Turning on again restores the last colour.
     await hass.services.async_call("light", "turn_on", {"entity_id": LAMP}, blocking=True)
-    assert diffuser.light == 2
-    await hass.services.async_call(
-        "light", "turn_on", {"entity_id": LAMP, "effect": "white"}, blocking=True
-    )
+    assert diffuser.light == 1
+
+
+async def test_lamp_ignores_amber_set_in_app(hass, bluetooth, links, diffuser) -> None:
+    diffuser.light = 2
+    await setup_entry(hass)
+    assert hass.states.get(LAMP).attributes["effect"] is None
+    await hass.services.async_call("light", "turn_off", {"entity_id": LAMP}, blocking=True)
+    await hass.services.async_call("light", "turn_on", {"entity_id": LAMP}, blocking=True)
     assert diffuser.light == 0
+
+
+async def test_scent_modes(hass, bluetooth, links, diffuser) -> None:
+    await setup_entry(hass)
+    state = hass.states.get(MODES)
+    assert state.attributes["activity_list"] == [
+        "Faint — 5 s, 15 min pause",
+        "Light — 10 s, 10 min pause",
+        "Standard — 16 s, 8 min pause",
+        "Rich — 20 s, 5 min pause",
+        "Strong — 30 s, 3 min pause",
+        "Intense — 45 s, 90 s pause",
+        "Maximum — 60 s, 30 s pause",
+        "Custom settings",
+    ]
+    # 16 s / 500 s from the vendor app matches no preset.
+    assert state.attributes["current_activity"] == "Custom settings"
+
+    await hass.services.async_call(
+        "remote", "turn_on", {"entity_id": MODES, "activity": "Standard — 16 s, 8 min pause"}, blocking=True
+    )
+    assert (diffuser.modes[0].run_seconds, diffuser.modes[0].pause_seconds) == (16, 480)
+    assert hass.states.get(MODES).attributes["current_activity"] == "Standard — 16 s, 8 min pause"
+
+    await hass.services.async_call("remote", "turn_off", {"entity_id": MODES}, blocking=True)
+    assert diffuser.power is False
+    assert hass.states.get(MODES).state == "off"
+    # Picking a mode while off also switches the diffuser on.
+    await hass.services.async_call(
+        "remote", "turn_on", {"entity_id": MODES, "activity": "Maximum — 60 s, 30 s pause"}, blocking=True
+    )
+    assert diffuser.power is True
+    assert (diffuser.modes[0].run_seconds, diffuser.modes[0].pause_seconds) == (60, 30)
+    # "Custom settings" leaves the values alone.
+    await hass.services.async_call(
+        "remote", "turn_on", {"entity_id": MODES, "activity": "Custom settings"}, blocking=True
+    )
+    assert (diffuser.modes[0].run_seconds, diffuser.modes[0].pause_seconds) == (60, 30)
+
+
+def test_russian_preset_labels() -> None:
+    labels = preset_labels("ru")
+    assert labels["standard"] == "Стандарт — 16 с, пауза 8 мин"
+    assert labels["max"] == "Максимум — 60 с, пауза 30 с"
+    assert labels["custom"] == "Свои настройки"
 
 
 async def test_mode_entities_and_service(hass, bluetooth, links, diffuser) -> None:

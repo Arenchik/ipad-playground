@@ -53,11 +53,15 @@
           "effect": {
             "state": {
               "white": "White",
-              "cyan": "Cyan",
-              "amber": "Amber"
+              "blue": "Blue"
             }
           }
         }
+      }
+    },
+    "humidifier": {
+      "intensity": {
+        "name": "Intensity"
       }
     },
     "select": {
@@ -99,6 +103,12 @@
     },
     "unknown_device": {
       "message": "Not a TWRA diffuser."
+    },
+    "unknown_scent_mode": {
+      "message": "Unknown scent mode: {mode}"
+    },
+    "no_commands": {
+      "message": "The diffuser has no remote commands; pick a scent mode instead."
     },
     "not_found": {
       "message": "Diffuser {address} is not in range of any connectable Bluetooth adapter or proxy."

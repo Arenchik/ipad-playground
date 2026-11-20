@@ -9,15 +9,17 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
-from .test_init import DIFFUSER, LAMP, SPRAY, bluetooth, setup_entry  # noqa: F401
+from .test_init import DIFFUSER, LAMP, MODES, SPRAY, bluetooth, setup_entry  # noqa: F401
 
 pytest.importorskip("pyhap")
 
 from homeassistant.components.homekit.accessories import HomeDriver, get_accessory  # noqa: E402
 from homeassistant.components.homekit.iidmanager import AccessoryIIDStorage  # noqa: E402
+from homeassistant.components.homekit.util import state_needs_accessory_mode  # noqa: E402
 from pyhap.const import (  # noqa: E402
     CATEGORY_HUMIDIFIER,
     CATEGORY_LIGHTBULB,
+    CATEGORY_TELEVISION,
     HAP_REPR_AID,
     HAP_REPR_CHARS,
     HAP_REPR_IID,
@@ -124,3 +126,27 @@ async def test_home_app_controls_diffuser(hass, bluetooth, links, diffuser, hk_d
     assert diffuser.light == 1
     await _set(hass, hk_driver, lamp, lamp.char_on, 0)
     assert diffuser.light == 3
+
+
+async def test_home_app_scent_mode_list(hass, bluetooth, links, diffuser, hk_driver) -> None:  # noqa: F811
+    await setup_entry(hass)
+    state = hass.states.get(MODES)
+    # A TV-style accessory: paired on its own, the bridge sets that up.
+    assert state_needs_accessory_mode(state)
+
+    tv = get_accessory(hass, hk_driver, state, 1, {})
+    assert type(tv).__name__ == "ActivityRemote" and tv.category == CATEGORY_TELEVISION
+    assert tv.sources == state.attributes["activity_list"]
+    hk_driver.add_accessory(tv)
+    tv.run()
+    await hass.async_block_till_done()
+    assert tv.char_active.value == 1
+    assert tv.sources[tv.char_input_source.value] == "Custom settings"
+
+    rich = tv.sources.index("Rich — 20 s, 5 min pause")
+    await _set(hass, hk_driver, tv, tv.char_input_source, rich)
+    assert (diffuser.modes[0].run_seconds, diffuser.modes[0].pause_seconds) == (20, 300)
+    assert tv.char_input_source.value == rich
+
+    await _set(hass, hk_driver, tv, tv.char_active, 0)
+    assert diffuser.power is False

@@ -54,6 +54,7 @@ PLATFORMS = [
     Platform.HUMIDIFIER,
     Platform.LIGHT,
     Platform.NUMBER,
+    Platform.REMOTE,
     Platform.SELECT,
     Platform.SWITCH,
     Platform.TIME,

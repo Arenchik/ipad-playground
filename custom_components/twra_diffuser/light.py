@@ -1,9 +1,9 @@
-"""The diffuser's lamp.
+"""The diffuser's lamp, limited to white and blue.
 
-The firmware only steps through white -> cyan -> amber -> off. Exposing
-it as an HS light lets HomeKit show its colour wheel; any picked colour
-snaps to the nearest of the three, and the same choice is available as
-effects in the HA UI.
+The firmware steps through white -> cyan -> amber -> off; amber is left
+out on purpose. Exposing it as an HS light lets HomeKit show its colour
+wheel: pale picks give white and any saturated colour gives blue. The
+same two choices are effects in the HA UI.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from . import TwraConfigEntry, async_run_command
 from .entity import TwraEntity
 from .twra import LIGHT_AMBER, LIGHT_CYAN, LIGHT_CYCLE, LIGHT_OFF, LIGHT_WHITE
 
-EFFECTS = {"white": LIGHT_WHITE, "cyan": LIGHT_CYAN, "amber": LIGHT_AMBER}
+EFFECTS = {"white": LIGHT_WHITE, "blue": LIGHT_CYAN}
 WHITE_SATURATION = 25.0
 
 
@@ -34,19 +34,12 @@ def _hs(index: int) -> tuple[float, float]:
     return round(hue * 360, 1), round(saturation * 100, 1)
 
 
-PRESET_HS = {index: _hs(index) for index in EFFECTS.values()}
+# Amber is still reported if the vendor app set it, never chosen here.
+PRESET_HS = {index: _hs(index) for index in (LIGHT_WHITE, LIGHT_CYAN, LIGHT_AMBER)}
 
 
 def nearest_preset(hs_color: tuple[float, float]) -> int:
-    hue, saturation = hs_color
-    if saturation < WHITE_SATURATION:
-        return LIGHT_WHITE
-
-    def hue_distance(index: int) -> float:
-        delta = abs(PRESET_HS[index][0] - hue) % 360
-        return min(delta, 360 - delta)
-
-    return min((LIGHT_CYAN, LIGHT_AMBER), key=hue_distance)
+    return LIGHT_WHITE if hs_color[1] < WHITE_SATURATION else LIGHT_CYAN
 
 
 async def async_setup_entry(
@@ -75,7 +68,7 @@ class TwraLamp(TwraEntity, LightEntity):
     @property
     def _index(self) -> int | None:
         index = self._client.state.light_index
-        if index is not None and index != LIGHT_OFF:
+        if index in EFFECTS.values():
             self._last_color = index
         return index
 

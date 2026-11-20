@@ -53,11 +53,15 @@
           "effect": {
             "state": {
               "white": "Белый",
-              "cyan": "Голубой",
-              "amber": "Оранжевый"
+              "blue": "Синий"
             }
           }
         }
+      }
+    },
+    "humidifier": {
+      "intensity": {
+        "name": "Интенсивность"
       }
     },
     "select": {
@@ -99,6 +103,12 @@
     },
     "unknown_device": {
       "message": "Это не диффузор TWRA."
+    },
+    "unknown_scent_mode": {
+      "message": "Неизвестный режим аромата: {mode}"
+    },
+    "no_commands": {
+      "message": "У диффузора нет команд пульта, выберите режим аромата."
     },
     "not_found": {
       "message": "Диффузор {address} вне зоны действия Bluetooth-адаптеров и прокси."
