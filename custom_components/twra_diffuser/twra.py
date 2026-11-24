@@ -303,6 +303,15 @@ class TwraClient:
     def set_ble_device(self, ble_device: BLEDevice) -> None:
         self._ble_device = ble_device
 
+    def restore(self, state: DiffuserState, identity: DeviceIdentity) -> None:
+        """Seed the last known state, e.g. from disk before a first connect."""
+        self.state = state
+        self.identity = identity
+
+    def notify(self) -> None:
+        """Tell listeners to re-read; for changes outside the client."""
+        self._notify()
+
     def register_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Call `callback` on every state or connection change."""
         self._callbacks.append(callback)
@@ -507,6 +516,9 @@ class TwraClient:
                         waiters.remove(future)
                 if not future.done():
                     future.cancel()
+                elif not future.cancelled():
+                    # Failed by a dropped link while nobody was awaiting it.
+                    future.exception()
 
     def _fail_waiters(self, err: Exception) -> None:
         for waiters in self._waiters.values():

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 import voluptuous as vol
+from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
@@ -25,6 +26,7 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
@@ -40,6 +42,7 @@ from .const import (
     RECONNECT_MIN,
     REFRESH_INTERVAL,
     SERVICE_SET_SPRAY_CYCLE,
+    STORE_VERSION,
     TIME_SYNC_INTERVAL,
 )
 from .twra import (
@@ -47,6 +50,8 @@ from .twra import (
     InvalidPassword,
     PasswordRequired,
     TwraClient,
+    DeviceIdentity,
+    DiffuserState,
     TwraError,
     WorkingMode,
 )
@@ -82,6 +87,11 @@ class TwraData:
     # Set when the diffuser is heard advertising, to retry without waiting.
     reconnect_wake: asyncio.Event = field(default_factory=asyncio.Event)
     closing: bool = False
+    # Whether HA's Bluetooth has heard the diffuser recently. Entities stay
+    # available while it has, even between connections.
+    present: bool = True
+    store: Store | None = None
+    schedule_opened: bool = False
     # Guest boost: settings to restore and the timer that restores them.
     boost_restore: tuple[int, int] | None = None
     boost_unsub: Callable[[], None] | None = None
@@ -157,45 +167,101 @@ async def async_apply_cycle(client: TwraClient, **changes: int) -> None:
             await async_run_command(client.update_mode(target))
 
 
+def _snapshot(client: TwraClient) -> dict:
+    state = client.state
+    return {
+        "power": state.power,
+        "light_rgb": list(state.light_rgb) if state.light_rgb else None,
+        "modes": [mode.to_bytes().hex() for mode in state.modes],
+        "serial": client.identity.serial,
+        "hardware_id": client.identity.hardware_id,
+    }
+
+
+def _restore(client: TwraClient, snapshot: dict) -> None:
+    try:
+        state = DiffuserState(
+            power=snapshot.get("power"),
+            light_rgb=tuple(snapshot["light_rgb"]) if snapshot.get("light_rgb") else None,
+            modes=tuple(WorkingMode.from_bytes(bytes.fromhex(m)) for m in snapshot.get("modes", [])),
+        )
+    except (KeyError, TypeError, ValueError) as err:
+        _LOGGER.debug("%s: ignoring unreadable saved state: %s", client.name, err)
+        return
+    client.restore(state, DeviceIdentity(snapshot.get("serial"), snapshot.get("hardware_id")))
+
+
+async def _async_open_schedule(data: TwraData) -> None:
+    """Days and hours belong to the user's automations: lift any schedule
+    set in the vendor app so the diffuser can spray whenever it is on."""
+    if data.schedule_opened or not data.client.connected:
+        return
+    try:
+        await async_apply_cycle(data.client)
+    except HomeAssistantError as err:
+        _LOGGER.warning("%s: could not open the schedule to all day: %s", data.client.name, err)
+    else:
+        data.schedule_opened = True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool:
     address: str = entry.data[CONF_ADDRESS]
     keep_connected = entry.options.get(CONF_KEEP_CONNECTED, DEFAULT_KEEP_CONNECTED)
 
-    ble_device = bluetooth.async_ble_device_from_address(hass, address.upper(), connectable=True)
-    if ble_device is None:
-        raise ConfigEntryNotReady(
-            translation_domain=DOMAIN,
-            translation_key="not_found",
-            translation_placeholders={"address": address},
-        )
+    store: Store = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
+    snapshot = await store.async_load()
 
+    ble_device = bluetooth.async_ble_device_from_address(hass, address.upper(), connectable=True)
+    heard = ble_device is not None
     client = TwraClient(
-        ble_device,
+        # Not heard yet: a placeholder until the first advertisement.
+        ble_device or BLEDevice(address.upper(), entry.title, None),
         password=entry.data.get(CONF_PASSWORD),
         keep_connected=keep_connected,
         idle_timeout=IDLE_TIMEOUT,
         now=dt_util.now,
     )
-    try:
-        await client.connect()
-    except (PasswordRequired, InvalidPassword) as err:
-        raise ConfigEntryError(translation_domain=DOMAIN, translation_key="invalid_password") from err
-    except (BleakError, TimeoutError, TwraError) as err:
-        raise ConfigEntryNotReady(
-            translation_domain=DOMAIN,
-            translation_key="cannot_connect",
-            translation_placeholders={"error": str(err) or type(err).__name__},
-        ) from err
+    if snapshot:
+        _restore(client, snapshot)
 
-    # Days and hours belong to the user's automations: lift any schedule
-    # set in the vendor app so the diffuser can spray whenever it is on.
-    try:
-        await async_apply_cycle(client)
-    except HomeAssistantError as err:
-        _LOGGER.warning("%s: could not open the schedule to all day: %s", client.name, err)
+    # The diffuser may be out of reach right now. With a saved state the
+    # integration starts anyway and connects in the background; failing
+    # setup here would leave HomeKit with "No Response" until HA retries.
+    error: Exception | None = None
+    if heard:
+        try:
+            await client.connect()
+        except (PasswordRequired, InvalidPassword) as err:
+            raise ConfigEntryError(
+                translation_domain=DOMAIN, translation_key="invalid_password"
+            ) from err
+        except (BleakError, TimeoutError, TwraError) as err:
+            error = err
+    if not client.connected:
+        if not client.state.modes:
+            # First start ever: nothing to show until it has connected once.
+            if error is None:
+                raise ConfigEntryNotReady(
+                    translation_domain=DOMAIN,
+                    translation_key="not_found",
+                    translation_placeholders={"address": address},
+                )
+            raise ConfigEntryNotReady(
+                translation_domain=DOMAIN,
+                translation_key="cannot_connect",
+                translation_placeholders={"error": str(error) or type(error).__name__},
+            ) from error
+        _LOGGER.info(
+            "%s: not reachable at start (%s); using the last known state",
+            client.name,
+            error or "not heard yet",
+        )
 
-    data = TwraData(client, frozenset(m.serial for m in client.state.modes))
+    data = TwraData(
+        client, frozenset(m.serial for m in client.state.modes), present=heard, store=store
+    )
     entry.runtime_data = data
+    await _async_open_schedule(data)
 
     # Entities of platforms later versions dropped (fan, remote, the
     # schedule switches and times).
@@ -215,6 +281,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
             except (BleakError, TimeoutError, TwraError) as err:
                 _LOGGER.debug("%s: reconnect failed: %s", client.name, err)
             else:
+                await _async_open_schedule(data)
                 return
             # Wait for the back-off, or less if the diffuser is heard again
             # (carried back into range, plugged in, rebooted)...
@@ -251,8 +318,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
         service_info: bluetooth.BluetoothServiceInfoBleak, change: bluetooth.BluetoothChange
     ) -> None:
         client.set_ble_device(service_info.device)
+        if not data.present:
+            data.present = True
+            client.notify()
         data.reconnect_wake.set()
         _ensure_reconnect()
+
+    @callback
+    def _on_unavailable(_service_info: bluetooth.BluetoothServiceInfoBleak) -> None:
+        # HA's Bluetooth stopped hearing it (out of range, switched off).
+        data.present = False
+        client.notify()
+
+    @callback
+    def _save_state() -> None:
+        if client.state.modes:
+            store.async_delay_save(lambda: _snapshot(client), 10)
 
     async def _refresh(_now: datetime) -> None:
         if keep_connected and not client.connected:
@@ -271,6 +352,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
             _LOGGER.debug("%s: time sync failed: %s", client.name, err)
 
     entry.async_on_unload(client.register_callback(_on_client_update))
+    entry.async_on_unload(client.register_callback(_save_state))
+    entry.async_on_unload(
+        bluetooth.async_track_unavailable(hass, _on_unavailable, address.upper(), connectable=True)
+    )
+    _save_state()
     entry.async_on_unload(
         bluetooth.async_register_callback(
             hass,
@@ -284,6 +370,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Started with the last known state: keep trying in the background.
+    _ensure_reconnect()
     return True
 
 
@@ -294,7 +382,10 @@ async def _async_update_listener(hass: HomeAssistant, entry: TwraConfigEntry) ->
 async def async_unload_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool:
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
-        entry.runtime_data.closing = True
-        entry.runtime_data.cancel_boost()
-        await entry.runtime_data.client.disconnect()
+        data = entry.runtime_data
+        data.closing = True
+        data.cancel_boost()
+        await data.client.disconnect()
+        if data.store is not None and data.client.state.modes:
+            await data.store.async_save(_snapshot(data.client))
     return unloaded

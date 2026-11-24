@@ -44,30 +44,58 @@ def service_info(ble_device):
     return info
 
 
+class FakeBluetooth(list):
+    """The advert callbacks, plus the "no longer heard" ones."""
+
+    def __init__(self, ble_device) -> None:
+        super().__init__()
+        self.gone: list = []
+        self.heard = True
+        self.ble_device = ble_device
+
+    def advertise(self) -> None:
+        self.heard = True
+        for callback in self:
+            callback(service_info(self.ble_device), None)
+
+    def lose(self) -> None:
+        self.heard = False
+        for callback in self.gone:
+            callback(service_info(self.ble_device))
+
+
 @pytest.fixture
 def bluetooth(ble_device):
-    """Stand in for HA's bluetooth stack; yields the advert callbacks."""
-    callbacks: list = []
+    """Stand in for HA's bluetooth stack."""
+    bt = FakeBluetooth(ble_device)
 
     def register(hass, callback, matcher, mode):
-        callbacks.append(callback)
+        bt.append(callback)
+        return lambda: None
+
+    def track_unavailable(hass, callback, address, connectable=True):
+        bt.gone.append(callback)
         return lambda: None
 
     with (
         patch(
             "homeassistant.components.bluetooth.async_ble_device_from_address",
-            return_value=ble_device,
+            side_effect=lambda *a, **k: ble_device if bt.heard else None,
         ),
         patch(
             "homeassistant.components.bluetooth.async_register_callback",
             side_effect=register,
         ),
         patch(
+            "homeassistant.components.bluetooth.async_track_unavailable",
+            side_effect=track_unavailable,
+        ),
+        patch(
             "custom_components.twra_diffuser.config_flow.async_discovered_service_info",
             return_value=[service_info(ble_device)],
         ),
     ):
-        yield callbacks
+        yield bt
 
 
 @pytest.fixture(autouse=True)
@@ -430,9 +458,7 @@ async def test_unavailable_then_reconnects(hass, bluetooth, links, diffuser) -> 
     assert hass.states.get(DIFFUSER).state == "on"
 
 
-async def test_back_in_range_reconnects_without_waiting(
-    hass, bluetooth, links, diffuser, ble_device
-) -> None:
+async def test_back_in_range_reconnects_without_waiting(hass, bluetooth, links, diffuser) -> None:
     with (
         patch("custom_components.twra_diffuser.RECONNECT_MIN", 0.05),
         patch("custom_components.twra_diffuser.RECONNECT_MAX", 30.0),
@@ -443,18 +469,80 @@ async def test_back_in_range_reconnects_without_waiting(
         links[-1].drop()
         # Attempts at ~0, .05, .15, .35, .75, 1.55 s; the next is due at ~3.15 s.
         await asyncio.sleep(2.0)
-        assert hass.states.get(DIFFUSER).state == "unavailable"
         assert len(links) == 1
+        # Still heard recently: keeps the last state instead of "unavailable".
+        assert hass.states.get(DIFFUSER).state == "on"
+        # HA's Bluetooth gives up on it: now it is unavailable.
+        bluetooth.lose()
+        await hass.async_block_till_done()
+        assert hass.states.get(DIFFUSER).state == "unavailable"
 
         # Back in range and advertising: reconnects right away, not at ~3.15 s.
         diffuser.out_of_range = False
-        info = service_info(ble_device)
-        for callback in bluetooth:
-            callback(info, None)
+        bluetooth.advertise()
         await asyncio.sleep(0.3)
         await hass.async_block_till_done()
         assert len(links) == 2
         assert hass.states.get(DIFFUSER).state == "on"
+
+
+async def test_command_reconnects_on_demand(hass, bluetooth, links, diffuser) -> None:
+    with patch("custom_components.twra_diffuser.RECONNECT_MIN", 30.0):
+        await setup_entry(hass)
+        diffuser.out_of_range = True
+        links[-1].drop()
+        await hass.async_block_till_done()
+        # The background retry failed and now waits 30 s; a tap still works.
+        diffuser.out_of_range = False
+        await press(hass, BUTTONS["eco"])
+        assert cycle(diffuser) == (10, 600)
+        assert len(links) == 2
+
+
+async def test_starts_with_saved_state_when_unreachable(hass, bluetooth, links, diffuser) -> None:
+    with patch("custom_components.twra_diffuser.RECONNECT_MIN", 0.05):
+        entry = await setup_entry(hass)
+        await press(hass, BUTTONS["eco"])
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+        # HA restarts while the diffuser is out of reach and not heard.
+        diffuser.out_of_range = True
+        bluetooth.heard = False
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.state is ConfigEntryState.LOADED
+        # Shown from the saved state, marked unavailable until heard.
+        assert hass.states.get(DIFFUSER).state == "unavailable"
+        assert hass.states.get(SPRAY).state == "unavailable"
+
+        diffuser.out_of_range = False
+        bluetooth.advertise()
+        await asyncio.sleep(0.3)
+        await hass.async_block_till_done()
+        assert hass.states.get(DIFFUSER).state == "on"
+        assert hass.states.get(SPRAY).state == "10 s"
+
+
+async def test_starts_unreachable_but_heard(hass, bluetooth, links, diffuser) -> None:
+    entry = await setup_entry(hass)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    # Heard, but every connection attempt fails at start.
+    diffuser.out_of_range = True
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    assert hass.states.get(DIFFUSER).state == "on"
+
+
+async def test_first_start_unreachable_retries_later(hass, bluetooth, links, diffuser) -> None:
+    diffuser.out_of_range = True
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="Aroma Diffuser", unique_id=ADDRESS, data={CONF_ADDRESS: ADDRESS}
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
 
 
 async def test_on_demand_mode_and_unload(hass, bluetooth, links, diffuser) -> None:

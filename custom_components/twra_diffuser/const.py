@@ -6,6 +6,7 @@ DOMAIN = "twra_diffuser"
 CONF_KEEP_CONNECTED = "keep_connected"
 DEFAULT_KEEP_CONNECTED = True
 IDLE_TIMEOUT = 30.0
+STORE_VERSION = 1
 
 REFRESH_INTERVAL = timedelta(minutes=5)
 # Reconnect back-off after a lost link, in seconds. Hearing the diffuser

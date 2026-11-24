@@ -17,6 +17,7 @@ class TwraEntity(Entity):
     _attr_should_poll = False
 
     def __init__(self, entry: TwraConfigEntry, key: str) -> None:
+        self._data = entry.runtime_data
         self._client: TwraClient = entry.runtime_data.client
         address = self._client.address
         self._attr_unique_id = f"{address}_{key}"
@@ -31,11 +32,12 @@ class TwraEntity(Entity):
 
     @property
     def available(self) -> bool:
-        # In on-demand mode the link is closed between commands, so the
-        # last known state stays valid.
-        if self._client.keep_connected:
-            return self._client.connected
-        return self._client.state.power is not None
+        # A dropped link is not "unavailable": commands reconnect on demand
+        # and the last known state stays shown. Only when HA's Bluetooth has
+        # not heard the diffuser for a while does it go unavailable.
+        if self._client.state.power is None:
+            return False
+        return self._client.connected or self._data.present
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self._client.register_callback(self._handle_update))
