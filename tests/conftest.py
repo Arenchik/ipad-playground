@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from bleak.backends.device import BLEDevice
+from bleak.exc import BleakError
 
 from .emulator import FakeBleakClient, FakeDiffuser
 
@@ -33,6 +34,8 @@ def links(diffuser):
     opened: list[FakeBleakClient] = []
 
     async def fake_establish(client_class, device, name, disconnected_callback=None, **kwargs):
+        if getattr(diffuser, "out_of_range", False):
+            raise BleakError("device out of range")
         link = FakeBleakClient(diffuser, disconnected_callback)
         opened.append(link)
         return link

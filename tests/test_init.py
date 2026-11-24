@@ -1,6 +1,8 @@
 """Home Assistant tests: config flow, entities, HomeKit-relevant shape."""
 from __future__ import annotations
 
+import asyncio
+
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -44,7 +46,13 @@ def service_info(ble_device):
 
 @pytest.fixture
 def bluetooth(ble_device):
-    """Stand in for HA's bluetooth stack."""
+    """Stand in for HA's bluetooth stack; yields the advert callbacks."""
+    callbacks: list = []
+
+    def register(hass, callback, matcher, mode):
+        callbacks.append(callback)
+        return lambda: None
+
     with (
         patch(
             "homeassistant.components.bluetooth.async_ble_device_from_address",
@@ -52,14 +60,14 @@ def bluetooth(ble_device):
         ),
         patch(
             "homeassistant.components.bluetooth.async_register_callback",
-            return_value=lambda: None,
+            side_effect=register,
         ),
         patch(
             "custom_components.twra_diffuser.config_flow.async_discovered_service_info",
             return_value=[service_info(ble_device)],
         ),
     ):
-        yield
+        yield callbacks
 
 
 @pytest.fixture(autouse=True)
@@ -420,6 +428,33 @@ async def test_unavailable_then_reconnects(hass, bluetooth, links, diffuser) -> 
     # The background reconnect opens a fresh link straight away.
     assert len(links) == 2
     assert hass.states.get(DIFFUSER).state == "on"
+
+
+async def test_back_in_range_reconnects_without_waiting(
+    hass, bluetooth, links, diffuser, ble_device
+) -> None:
+    with (
+        patch("custom_components.twra_diffuser.RECONNECT_MIN", 0.05),
+        patch("custom_components.twra_diffuser.RECONNECT_MAX", 30.0),
+    ):
+        await setup_entry(hass)
+        # Carried away: the link drops and reconnects keep failing.
+        diffuser.out_of_range = True
+        links[-1].drop()
+        # Attempts at ~0, .05, .15, .35, .75, 1.55 s; the next is due at ~3.15 s.
+        await asyncio.sleep(2.0)
+        assert hass.states.get(DIFFUSER).state == "unavailable"
+        assert len(links) == 1
+
+        # Back in range and advertising: reconnects right away, not at ~3.15 s.
+        diffuser.out_of_range = False
+        info = service_info(ble_device)
+        for callback in bluetooth:
+            callback(info, None)
+        await asyncio.sleep(0.3)
+        await hass.async_block_till_done()
+        assert len(links) == 2
+        assert hass.states.get(DIFFUSER).state == "on"
 
 
 async def test_on_demand_mode_and_unload(hass, bluetooth, links, diffuser) -> None:

@@ -36,6 +36,8 @@ from .const import (
     DEFAULT_KEEP_CONNECTED,
     DOMAIN,
     IDLE_TIMEOUT,
+    RECONNECT_MAX,
+    RECONNECT_MIN,
     REFRESH_INTERVAL,
     SERVICE_SET_SPRAY_CYCLE,
     TIME_SYNC_INTERVAL,
@@ -77,6 +79,8 @@ class TwraData:
     client: TwraClient
     mode_serials: frozenset[int]
     reconnect_task: asyncio.Task | None = field(default=None)
+    # Set when the diffuser is heard advertising, to retry without waiting.
+    reconnect_wake: asyncio.Event = field(default_factory=asyncio.Event)
     closing: bool = False
     # Guest boost: settings to restore and the timer that restores them.
     boost_restore: tuple[int, int] | None = None
@@ -202,14 +206,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
             registry.async_remove(old.entity_id)
 
     async def _reconnect() -> None:
-        delay = 5
-        while not client.connected:
+        delay = RECONNECT_MIN
+        while not client.connected and not data.closing:
+            attempt = hass.loop.time()
+            data.reconnect_wake.clear()
             try:
                 await client.connect()
             except (BleakError, TimeoutError, TwraError) as err:
                 _LOGGER.debug("%s: reconnect failed: %s", client.name, err)
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 300)
+            else:
+                return
+            # Wait for the back-off, or less if the diffuser is heard again
+            # (carried back into range, plugged in, rebooted)...
+            try:
+                async with asyncio.timeout(delay):
+                    await data.reconnect_wake.wait()
+            except TimeoutError:
+                delay = min(delay * 2, RECONNECT_MAX)
+            else:
+                # ...but never retry more often than every RECONNECT_MIN.
+                delay = RECONNECT_MIN
+                await asyncio.sleep(max(0.0, attempt + RECONNECT_MIN - hass.loop.time()))
 
     @callback
     def _ensure_reconnect() -> None:
@@ -234,6 +251,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
         service_info: bluetooth.BluetoothServiceInfoBleak, change: bluetooth.BluetoothChange
     ) -> None:
         client.set_ble_device(service_info.device)
+        data.reconnect_wake.set()
         _ensure_reconnect()
 
     async def _refresh(_now: datetime) -> None:

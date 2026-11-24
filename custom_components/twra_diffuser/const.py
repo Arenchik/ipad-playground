@@ -8,6 +8,10 @@ DEFAULT_KEEP_CONNECTED = True
 IDLE_TIMEOUT = 30.0
 
 REFRESH_INTERVAL = timedelta(minutes=5)
+# Reconnect back-off after a lost link, in seconds. Hearing the diffuser
+# advertise cuts the wait short.
+RECONNECT_MIN = 5.0
+RECONNECT_MAX = 60.0
 TIME_SYNC_INTERVAL = timedelta(hours=6)
 
 # The intensity slider spans these pauses between sprays (1 % -> MAX).
