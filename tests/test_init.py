@@ -87,6 +87,10 @@ def bluetooth(ble_device):
             side_effect=register,
         ),
         patch(
+            "homeassistant.components.bluetooth.async_address_present",
+            side_effect=lambda *a, **k: bt.heard,
+        ),
+        patch(
             "homeassistant.components.bluetooth.async_track_unavailable",
             side_effect=track_unavailable,
         ),
@@ -472,8 +476,12 @@ async def test_back_in_range_reconnects_without_waiting(hass, bluetooth, links, 
         assert len(links) == 1
         # Still heard recently: keeps the last state instead of "unavailable".
         assert hass.states.get(DIFFUSER).state == "on"
-        # HA's Bluetooth gives up on it: now it is unavailable.
+        # HA's Bluetooth misses it for a few minutes: still shown as before.
         bluetooth.lose()
+        await hass.async_block_till_done()
+        assert hass.states.get(DIFFUSER).state == "on"
+        # Silent for half an hour: now it is unavailable.
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=31))
         await hass.async_block_till_done()
         assert hass.states.get(DIFFUSER).state == "unavailable"
 
@@ -484,6 +492,48 @@ async def test_back_in_range_reconnects_without_waiting(hass, bluetooth, links, 
         await hass.async_block_till_done()
         assert len(links) == 2
         assert hass.states.get(DIFFUSER).state == "on"
+
+
+async def test_short_dropouts_stay_available(hass, bluetooth, links, diffuser) -> None:
+    with patch("custom_components.twra_diffuser.RECONNECT_MIN", 30.0):
+        await setup_entry(hass)
+        diffuser.out_of_range = True
+        links[-1].drop()
+        bluetooth.lose()
+        await hass.async_block_till_done()
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=20))
+        await hass.async_block_till_done()
+        assert hass.states.get(DIFFUSER).state == "on"
+        # Heard again before the half hour: the countdown is called off.
+        bluetooth.advertise()
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=40))
+        await hass.async_block_till_done()
+        assert hass.states.get(DIFFUSER).state == "on"
+        bluetooth.lose()
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=80))
+        await hass.async_block_till_done()
+        assert hass.states.get(DIFFUSER).state == "unavailable"
+
+
+async def test_command_retries_a_failed_connect(hass, bluetooth, links, diffuser) -> None:
+    with (
+        patch("custom_components.twra_diffuser.RECONNECT_MIN", 30.0),
+        patch("custom_components.twra_diffuser.twra.CONNECT_RETRY_DELAY", 0.05),
+    ):
+        await setup_entry(hass)
+        diffuser.out_of_range = True
+        links[-1].drop()
+        await hass.async_block_till_done()
+
+        async def back_in_range() -> None:
+            await asyncio.sleep(0.02)
+            diffuser.out_of_range = False
+
+        # The first connect round fails; the retry gets through.
+        task = asyncio.create_task(back_in_range())
+        await press(hass, BUTTONS["eco"])
+        await task
+        assert cycle(diffuser) == (10, 600)
 
 
 async def test_command_reconnects_on_demand(hass, bluetooth, links, diffuser) -> None:
@@ -511,7 +561,12 @@ async def test_starts_with_saved_state_when_unreachable(hass, bluetooth, links, 
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
         assert entry.state is ConfigEntryState.LOADED
-        # Shown from the saved state, marked unavailable until heard.
+        # Shown from the saved state, so HomeKit keeps working...
+        assert hass.states.get(DIFFUSER).state == "on"
+        assert hass.states.get(SPRAY).state == "10 s"
+        # ...until it has stayed silent for half an hour.
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=31))
+        await hass.async_block_till_done()
         assert hass.states.get(DIFFUSER).state == "unavailable"
         assert hass.states.get(SPRAY).state == "unavailable"
 

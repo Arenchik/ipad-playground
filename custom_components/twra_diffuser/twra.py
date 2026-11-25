@@ -26,6 +26,8 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 
 _LOGGER = logging.getLogger(__name__)
 
+CONNECT_RETRY_DELAY = 3.0
+
 CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 
 HEADER = b"\x55\xaa"
@@ -324,7 +326,8 @@ class TwraClient:
     # -- public operations -------------------------------------------------
 
     async def connect(self) -> None:
-        await self._run(self._noop)
+        # The caller (a reconnect loop) does its own retrying.
+        await self._run(self._noop, connect_rounds=1)
 
     async def refresh(self) -> None:
         """Re-read the schedule; the device pushes its state right after."""
@@ -375,12 +378,12 @@ class TwraClient:
     async def _noop(self) -> None:
         return None
 
-    async def _run(self, operation: Callable[[], object]) -> None:
+    async def _run(self, operation: Callable[[], object], connect_rounds: int = 2) -> None:
         self._cancel_idle()
         async with self._lock:
             try:
                 for attempt in (1, 2):
-                    await self._ensure_connected()
+                    await self._connect_with_retry(connect_rounds)
                     try:
                         await operation()
                         break
@@ -391,6 +394,19 @@ class TwraClient:
                         _LOGGER.debug("%s: link lost during command, retrying", self.name)
             finally:
                 self._schedule_idle()
+
+    async def _connect_with_retry(self, rounds: int) -> None:
+        """A weak link often fails a whole establish_connection round; a
+        command gets another one after a short pause before giving up."""
+        for round_ in range(1, rounds + 1):
+            try:
+                await self._ensure_connected()
+                return
+            except (BleakError, TimeoutError):
+                if round_ == rounds:
+                    raise
+                _LOGGER.debug("%s: connect failed, retrying", self.name)
+                await asyncio.sleep(CONNECT_RETRY_DELAY)
 
     async def _ensure_connected(self) -> None:
         if self.connected:

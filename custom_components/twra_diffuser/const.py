@@ -13,6 +13,10 @@ REFRESH_INTERVAL = timedelta(minutes=5)
 # advertise cuts the wait short.
 RECONNECT_MIN = 5.0
 RECONNECT_MAX = 60.0
+# HA's Bluetooth calls a device gone after a few minutes without adverts; a
+# diffuser at the edge of range is missed that often. Entities only turn
+# unavailable once it has been silent and unconnected this long.
+OFFLINE_AFTER = timedelta(minutes=30)
 TIME_SYNC_INTERVAL = timedelta(hours=6)
 
 # The intensity slider spans these pauses between sprays (1 % -> MAX).

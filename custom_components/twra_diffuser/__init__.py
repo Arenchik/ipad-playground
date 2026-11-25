@@ -25,7 +25,7 @@ from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
 )
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
@@ -38,6 +38,7 @@ from .const import (
     DEFAULT_KEEP_CONNECTED,
     DOMAIN,
     IDLE_TIMEOUT,
+    OFFLINE_AFTER,
     RECONNECT_MAX,
     RECONNECT_MIN,
     REFRESH_INTERVAL,
@@ -87,9 +88,10 @@ class TwraData:
     # Set when the diffuser is heard advertising, to retry without waiting.
     reconnect_wake: asyncio.Event = field(default_factory=asyncio.Event)
     closing: bool = False
-    # Whether HA's Bluetooth has heard the diffuser recently. Entities stay
-    # available while it has, even between connections.
+    # False once the diffuser has been neither heard nor connected for
+    # OFFLINE_AFTER. Entities stay available until then.
     present: bool = True
+    offline_unsub: Callable[[], None] | None = None
     store: Store | None = None
     schedule_opened: bool = False
     # Guest boost: settings to restore and the timer that restores them.
@@ -101,6 +103,11 @@ class TwraData:
             self.boost_unsub()
             self.boost_unsub = None
         self.boost_restore = None
+
+    def cancel_offline(self) -> None:
+        if self.offline_unsub is not None:
+            self.offline_unsub()
+            self.offline_unsub = None
 
 
 type TwraConfigEntry = ConfigEntry[TwraData]
@@ -257,9 +264,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
             error or "not heard yet",
         )
 
-    data = TwraData(
-        client, frozenset(m.serial for m in client.state.modes), present=heard, store=store
-    )
+    data = TwraData(client, frozenset(m.serial for m in client.state.modes), store=store)
     entry.runtime_data = data
     await _async_open_schedule(data)
 
@@ -281,6 +286,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
             except (BleakError, TimeoutError, TwraError) as err:
                 _LOGGER.debug("%s: reconnect failed: %s", client.name, err)
             else:
+                _mark_present()
                 await _async_open_schedule(data)
                 return
             # Wait for the back-off, or less if the diffuser is heard again
@@ -311,24 +317,49 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
             # Modes were added or removed in the vendor app: rebuild entities.
             hass.config_entries.async_schedule_reload(entry.entry_id)
             return
+        if client.connected:
+            _mark_present()
+        elif not bluetooth.async_address_present(hass, address.upper(), connectable=True):
+            # Link lost while HA's Bluetooth already counts it as gone.
+            _start_offline_timer()
         _ensure_reconnect()
+
+    @callback
+    def _mark_present() -> None:
+        data.cancel_offline()
+        if not data.present:
+            data.present = True
+            client.notify()
+
+    @callback
+    def _go_offline(_now: datetime) -> None:
+        data.offline_unsub = None
+        if client.connected or data.closing:
+            return
+        _LOGGER.info("%s: not heard for %s, marking unavailable", client.name, OFFLINE_AFTER)
+        data.present = False
+        client.notify()
+
+    @callback
+    def _start_offline_timer() -> None:
+        if data.offline_unsub is None and data.present:
+            data.offline_unsub = async_call_later(hass, OFFLINE_AFTER, _go_offline)
 
     @callback
     def _on_advertisement(
         service_info: bluetooth.BluetoothServiceInfoBleak, change: bluetooth.BluetoothChange
     ) -> None:
         client.set_ble_device(service_info.device)
-        if not data.present:
-            data.present = True
-            client.notify()
+        _mark_present()
         data.reconnect_wake.set()
         _ensure_reconnect()
 
     @callback
     def _on_unavailable(_service_info: bluetooth.BluetoothServiceInfoBleak) -> None:
-        # HA's Bluetooth stopped hearing it (out of range, switched off).
-        data.present = False
-        client.notify()
+        # HA's Bluetooth missed its adverts for a few minutes. At the edge of
+        # range that happens all the time, so wait before giving up on it.
+        if not client.connected:
+            _start_offline_timer()
 
     @callback
     def _save_state() -> None:
@@ -356,7 +387,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> bool
     entry.async_on_unload(
         bluetooth.async_track_unavailable(hass, _on_unavailable, address.upper(), connectable=True)
     )
+    entry.async_on_unload(data.cancel_offline)
     _save_state()
+    if not heard and not client.connected:
+        # Started from the saved state: shown as before until proven gone.
+        _start_offline_timer()
     entry.async_on_unload(
         bluetooth.async_register_callback(
             hass,
@@ -385,6 +420,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: TwraConfigEntry) -> boo
         data = entry.runtime_data
         data.closing = True
         data.cancel_boost()
+        data.cancel_offline()
         await data.client.disconnect()
         if data.store is not None and data.client.state.modes:
             await data.store.async_save(_snapshot(data.client))
